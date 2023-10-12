@@ -33,34 +33,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Please provide a valid benchmark duration in seconds");
     let total_txs: u64 = txs_per_second * benchmark_duration;
     let sleep_duration = Duration::from_micros(1_000_000 / txs_per_second);
-    let filename = "keypair.json";
-    let key_pair: KeyPair;
+    let sender_filename = "sender_keypair.json";
+    let recipient_filename = "recipient_keypair.json";
+    let recipient_key_pair: KeyPair;
 
-    // Check if keypair.json already exists, if not generate and save
-    if !std::path::Path::new(filename).exists() {
+    // Check if recipient_keypair.json already exists, if not generate and save
+    if !std::path::Path::new(recipient_filename).exists() {
         // Generate a random key-pair
         let wallet = LocalWallet::new(&mut thread_rng());
-        key_pair = KeyPair {
+        recipient_key_pair = KeyPair {
             private_key: wallet.signer().as_nonzero_scalar().to_string(),
             address: hex::encode(wallet.address().as_bytes()),
         };
 
-        let json = serde_json::to_string_pretty(&key_pair.clone())?;
-        fs::write(filename, json)?;
-        println!("Key-pair saved to {}", filename);
+        let json = serde_json::to_string_pretty(&recipient_key_pair.clone())?;
+        fs::write(recipient_filename, json)?;
+        println!("Key-pair saved to {}", recipient_filename);
     } else {
         // Read the key-pair from the file
-        let data = fs::read_to_string(filename)?;
-        key_pair = serde_json::from_str(&data)?;
+        let data = fs::read_to_string(recipient_filename)?;
+        recipient_key_pair = serde_json::from_str(&data)?;
     }
+
+    // Check if sender_keypair.json already exists, if not exit
+    if !std::path::Path::new(sender_filename).exists() {
+        println!("Please create a sender_keypair.json file");
+        std::process::exit(1);
+    }
+
+    // Read the key-pair from the file
+    let data = fs::read_to_string(sender_filename)?;
+    let sender_key_pair: KeyPair = serde_json::from_str(&data)?;
+
 
     // Connect to the network (localhost in this example)
     let provider = Provider::<Http>::try_from("https://rpc.dev.hydrasquare-holding.com")?;
 
     // Load wallet
     // Replace with your private key
-    let private_key_bytes =
-        hex::decode("62cbb1e7f78278e34d533e8a76e7fed24f694342ca188a1fb8943d24d6b25d2b").unwrap();
+    // let private_key_bytes =
+    //     hex::decode("62cbb1e7f78278e34d533e8a76e7fed24f694342ca188a1fb8943d24d6b25d2b").unwrap();
+    let private_key_bytes = hex::decode(sender_key_pair.private_key).unwrap();
     let wallet = Wallet::from_bytes(&private_key_bytes)
         .expect("Failed to create wallet from private key bytes")
         .with_chain_id(42 as u64);
@@ -84,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = chrono::Utc::now();
     println!("Connected to chain {}", chain_id);
     println!("Nonce: {}", nonce);
-    println!("Address: {}", key_pair.address);
+    println!("Address: {}", recipient_key_pair.address);
     println!("Sending {} transactions per second", txs_per_second);
     println!("Benchmark duration: {} seconds", benchmark_duration);
     println!("Total txs: {}", total_txs);
@@ -102,11 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let current_nonce = atomic_nonce.fetch_add(1, Ordering::SeqCst);
 
             let provider_clone = provider_w_signer.clone();
-            let key_pair_clone = key_pair.clone();
+            let recipient_key_pair_clone = recipient_key_pair.clone();
             let processed_txs_clone = processed_txs.clone();
 
             let handle = tokio::spawn(async move {
-                let recipient = Address::from_str(&key_pair_clone.address).unwrap();
+                let recipient = Address::from_str(&recipient_key_pair_clone.address).unwrap();
 
                 let tx = Eip1559TransactionRequest::new()
                     .nonce(current_nonce)
