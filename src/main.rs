@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::ops::Add;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, time::Duration};
 use tokio::time::sleep;
 use eyre::Result;
@@ -17,7 +19,7 @@ struct KeyPair {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parameters
-    let txs_per_second = 10;
+    let txs_per_second = 100;
     let sleep_duration = Duration::from_micros(1_000_000 / txs_per_second);
     let filename = "keypair.json";
     let key_pair: KeyPair;
@@ -65,32 +67,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Address: {}", key_pair.address);
     println!("Sending {} transactions per second", txs_per_second);
 
+    // loop {
+    //     // Send a transaction (in this case, a simple ETH transfer)
+    //     let recipient = Address::from_str(&key_pair.address)?;
+    //     let tx = Eip1559TransactionRequest::new()
+    //         .nonce(nonce)
+    //         .to(recipient)
+    //         .max_priority_fee_per_gas(0u64)
+    //         .max_fee_per_gas(0u64)
+    //         .gas(21000u64)
+    //         .value(U256::exp10(18)); // Sending 100 wei
+    //     let pending_tx = provider_w_signer.send_transaction(tx, None).await?;
+    //     println!("Tx sent: 0x{:x}", pending_tx.tx_hash());
+
+    //     // get the mined tx
+    //     let _receipt = pending_tx
+    //         .await?
+    //         .ok_or_else(|| eyre::format_err!("tx dropped from mempool"))?;
+
+    //     // let tx = provider_w_signer.get_transaction(_receipt.transaction_hash).await?;
+    //     // println!("Sent tx: {}\n", serde_json::to_string(&tx)?);
+    //     // println!("Tx receipt: {}", serde_json::to_string(&_receipt)?);
+
+    //     nonce = nonce.add(1);
+    //     sleep(sleep_duration).await;
+    //     // break;
+    // }
+
+
+    let atomic_nonce = Arc::new(AtomicU64::new(nonce.as_u64()));
+
     loop {
-        // Send a transaction (in this case, a simple ETH transfer)
-        let recipient = Address::from_str(&key_pair.address)?;
-        let tx = Eip1559TransactionRequest::new()
-            .nonce(nonce)
-            .to(recipient)
-            .max_priority_fee_per_gas(0u64)
-            .max_fee_per_gas(0u64)
-            .gas(21000u64)
-            .value(U256::exp10(18)); // Sending 100 wei
-        let pending_tx = provider_w_signer.send_transaction(tx, None).await?;
-        println!("Tx sent: 0x{:x}", pending_tx.tx_hash());
+        let mut handles = Vec::with_capacity(txs_per_second as usize);
 
-        // get the mined tx
-        let _receipt = pending_tx
-            .await?
-            .ok_or_else(|| eyre::format_err!("tx dropped from mempool"))?;
+        for _ in 0..txs_per_second {
+            let current_nonce = atomic_nonce.fetch_add(1, Ordering::SeqCst);
 
-        // let tx = provider_w_signer.get_transaction(_receipt.transaction_hash).await?;
-        // println!("Sent tx: {}\n", serde_json::to_string(&tx)?);
-        // println!("Tx receipt: {}", serde_json::to_string(&_receipt)?);
+            let provider_clone = provider_w_signer.clone();
+            let key_pair_clone = key_pair.clone();
 
-        nonce = nonce.add(1);
+            let handle = tokio::spawn(async move {
+                let recipient = Address::from_str(&key_pair_clone.address).unwrap();
+
+                let tx = Eip1559TransactionRequest::new()
+                    .nonce(current_nonce)
+                    .to(recipient)
+                    .max_priority_fee_per_gas(0u64) // Adjust as needed
+                    .max_fee_per_gas(0u64) // Adjust as needed
+                    .gas(21000u64)
+                    .value(U256::exp10(10));
+
+                let pending_tx = provider_clone.send_transaction(tx, None).await;
+                match pending_tx {
+                    Ok(tx) => println!("Tx sent: 0x{:x}", tx.tx_hash()),
+                    Err(e) => println!("Error sending tx: {}", e),
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Awaiting all the spawned tasks
+        for handle in handles {
+            handle.await?;
+        }
+
         sleep(sleep_duration).await;
-        // break;
     }
+
+
+
+
+
+
     #[allow(unreachable_code)]
     Ok(())
 }
